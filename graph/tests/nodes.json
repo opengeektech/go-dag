@@ -1,0 +1,30 @@
+{
+
+    "graphList": [
+        {
+            "graphName": "test",
+            "nodes": [
+                {
+                    "id": 1,
+                    "name": "start",
+                    "dependOnName": [ ]
+                },
+                {
+                    "id": 2,
+                    "name": "step1",
+                    "dependOnName": [ "start" ]
+                },
+                {
+                    "id": 3,
+                    "name": "step2",
+                    "dependOnName": [ "start", "step1" ]
+                },
+                {
+                    "id": 4,
+                    "name": "end",
+                    "dependOnName": [ "start", "step2" ]
+                }
+            ]
+        }
+    ]
+}
