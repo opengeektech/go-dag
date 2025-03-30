@@ -2,18 +2,45 @@ package dag
 
 import (
 	"context"
-	"github.com/opengeektech/go-dag/graph"
+	"fmt"
 	"log"
-	"runtime/debug"
 	"sync"
 	"sync/atomic"
+
+	"github.com/opengeektech/go-dag/graph"
 )
 
 type ExecuteState[K, V any] struct {
-	Cond  sync.Cond
-	Funcs map[string]HandlerFunc[K, V]
-	G     *graph.Graph
-	It    *graph.TopoIterator
+	protect   sync.RWMutex
+	Funcs     map[string]HandlerFunc[K, V]
+	G         *graph.Graph
+	GraphIter *graph.TopoIterator
+
+	NodeResult map[uint32]any
+	NodeOrder  map[uint32]uint32
+	Active     chan uint32
+	Recv       chan uint32
+	OrdIdAlloc uint32
+}
+
+func (r *ExecuteState[K, V]) sendChan(ch chan uint32, k uint32) {
+	defer func() {
+		f := recover()
+		if f != nil {
+			log.Printf(" error Send Chan: %v", f)
+		}
+	}()
+	ch <- k
+}
+func (r *ExecuteState[K, V]) write(fn func()) {
+	r.protect.Lock()
+	defer r.protect.Unlock()
+	fn()
+}
+func (r *ExecuteState[K, V]) read(fn func()) {
+	r.protect.RLock()
+	defer r.protect.RUnlock()
+	fn()
 }
 
 type HandlerFunc[Input any, Output any] func(ctx context.Context, s *State[Input, Output]) (Output, error)
@@ -37,218 +64,245 @@ func (r *dependstack) SetLast(name string, val any) uint32 {
 	r.last.Store(val)
 	return nv
 }
-
-func (r *ExecuteState[K, V]) RunSync(ctx context.Context, input K) (V, error) {
-	it := r.G.TopoIterator()
-	r.It = it
-	var last V
-	var prevs = make(map[string]result[V])
-	var ordId = uint32(1)
-	for r.It.HasNext() {
-		nodeList, err := r.It.Next()
-		if err != nil {
-			var e V
-			return e, err
-		}
-		for _, currNode := range nodeList {
-			if currNode == nil {
-				continue
-			}
-			handler, ok := r.Funcs[currNode.Name]
-			if !ok || handler == nil {
-				continue
-			}
-			var lastoutput = make(map[string]V)
-			dep := r.G.GetDepend(currNode.Id)
-			var nodeOrder = make(map[string]uint32, len(dep))
-			for _, v := range dep {
-				depNode := r.G.FindNode(v)
-				val1 := prevs[depNode.Name]
-				lastoutput[depNode.Name] = val1.V
-				nodeOrder[depNode.Name] = val1.Order
-			}
-
-			o1, err := handler(ctx, &State[K, V]{
-				Input:            input,
-				DependNodeResult: lastoutput,
-				NodeOrders:       nodeOrder,
-				Last:             last,
-				CurrentNode: *currNode,
-			})
-			prevs[currNode.Name] = result[V]{
-				V:     o1,
-				Node:  currNode,
-				Err:   err,
-				Order: ordId,
-			}
-			ordId++
-			last = o1
-
+func (r *ExecuteState[K, V]) iterclose() {
+	fn := func(ch chan uint32) {
+		defer func() {
+			err := recover()
 			if err != nil {
-				return last, err
+				log.Printf("close chan error %+v", err)
 			}
+
+		}()
+		close(ch)
+	}
+	// fn(r.Active)
+	fn(r.Recv)
+}
+func (r *ExecuteState[K, V]) ensure() {
+	if r.NodeOrder == nil {
+		r.NodeOrder = make(map[uint32]uint32)
+	}
+	if r.NodeResult == nil {
+		r.NodeResult = make(map[uint32]any)
+	}
+}
+func (r *ExecuteState[K, V]) RunAsync(ctx context.Context, input K) (V, error) {
+	r.ensure()
+	var (
+		v   V
+		err error
+	)
+	defer r.iterclose()
+	type tmp struct {
+		V   V
+		Err error
+	}
+	ch := r.IterChan()
+	out := make(chan tmp, 1)
+	defer close(out)
+	for {
+		if ctx.Err() != nil {
+			return v, ctx.Err()
+		}
+		select {
+		case <-ctx.Done():
+			return v,ctx.Err()
+		case nodeId, ok := <-ch:
+			if !ok {
+				return v, err
+			}
+			if nodeId == 0 {
+				panic("illgal NodeId ")
+			}
+			go func() {
+				gg := r.G.FindNode(nodeId)
+				t1, err := r.RunNodeBlock(ctx, gg, input)
+				if ctx.Err() != nil {
+					return
+				}
+				out <- tmp{
+					V:   t1,
+					Err: err,
+				}
+			}()
+		case out, ok := <-out:
+			if !ok {
+				return v, err
+			}
+			if out.Err != nil {
+				return out.V, out.Err
+			}
+			v = out.V
+			err = out.Err
 		}
 	}
-
-	return last, nil
 }
 
-type result[V any] struct {
+func (r *ExecuteState[K, V]) RunSync(ctx context.Context, input K) (V, error) {
+	r.ensure()
+	var (
+		v   V
+		err error
+	)
+	defer r.iterclose()
+	for nodeId := range r.Iter() {
+		if nodeId == 0 {
+			panic("illgal NodeId ")
+		}
+		if ctx.Err() != nil {
+			return v, ctx.Err()
+		}
+		v, err = r.RunNodeBlock(ctx, r.G.FindNode(nodeId), input)
+		if err != nil {
+			return v, err
+		}
+		// fmt.Println(v,err)
+	}
+	return v, err
+}
+
+type NodeOutput[V any] struct {
 	V     V
 	Node  *graph.Node
 	Err   error
 	Order uint32
+	Valid bool
 }
 
-func (r *ExecuteState[K, V]) RunAsync(ctx context.Context, input K) (V, error) {
+func (r *ExecuteState[K, V]) iterDone(id uint32) {
+	r.sendChan(r.Recv, id)
+}
+func (r *ExecuteState[K, V]) IterChan() chan uint32 {
+	if r.GraphIter != nil {
+		panic("graph iterator is not nil")
+	}
 	it := r.G.TopoIterator()
-	r.It = it
-	var depstack dependstack
-	var nodeResult = sync.Map{}
-	ch := make(chan result[V], 1)
-	// var last = atomic.Value{}
-	var wg sync.WaitGroup
-	var consumerWait = make(chan struct{})
-	ctx, abort := context.WithCancel(ctx)
-	defer abort()
+	r.GraphIter = it
+	r.Active = make(chan uint32, 1)
+	r.Recv = make(chan uint32, 1)
 	go func() {
-		defer func() {
-			if e := recover(); e != nil {
-				log.Printf("error panic  ON %v", e)
+		r.doPush(r.Active, r.Recv)
+	}()
+	return r.Active
+}
+
+func (state *ExecuteState[K, V]) RunNodeBlock(ctx context.Context, node *graph.Node, input K) (V, error) {
+	depend := state.G.GetDepend(node.Id)
+	var lastNodeOutput V
+	var ordId = uint32(0)
+	var resultMap = make(map[string]V)
+	var ordMap = make(map[string]uint32)
+	state.read(func() {
+		for _, depId := range depend {
+			ord, ok := state.NodeOrder[depId]
+			if !ok {
+				panic(fmt.Sprintf("node %d not found", depId))
 			}
-			close(consumerWait)
-		}()
-	Outer:
+			dependResult, _ := state.NodeResult[depId].(*NodeOutput[V])
+			if ord >= ordId {
+				lastNodeOutput = dependResult.V
+				ordId = dependResult.Order
+			}
+			if dependResult != nil {
+				resultMap[dependResult.Node.Name] = dependResult.V
+				ordMap[dependResult.Node.Name] = dependResult.Order
+			}
+		}
+	})
+	st := &State[K, V]{
+		Input:            input,
+		DependNodeResult: resultMap,
+		NodeOrders:       ordMap,
+		CurrentNode:      *node,
+		Last:             lastNodeOutput,
+	}
+	handler, ok := state.Funcs[node.Name]
+	if !ok || handler == nil {
+		state.write(func() {
+			state.OrdIdAlloc++
+			state.NodeOrder[node.Id] = state.OrdIdAlloc
+			state.NodeResult[node.Id] = &NodeOutput[V]{
+				V:     lastNodeOutput,
+				Node:  node,
+				Err:   nil,
+				Order: state.OrdIdAlloc,
+				Valid: false,
+			}
+			state.sendChan(state.Recv, node.Id)
+		})
+		return lastNodeOutput, nil
+	}
+	output, err := handler(ctx, st)
+	state.write(func() {
+		state.OrdIdAlloc++
+		state.NodeOrder[node.Id] = state.OrdIdAlloc
+		state.NodeResult[node.Id] = &NodeOutput[V]{
+			V:     output,
+			Node:  node,
+			Err:   err,
+			Order: state.OrdIdAlloc,
+			Valid: true,
+		}
+		state.sendChan(state.Recv, node.Id)
+	})
+	return output, err
+
+}
+func (r *ExecuteState[K, V]) Iter() func(func(activeId uint32) bool) {
+	ch := r.IterChan()
+	return func(yield func(activeId uint32) bool) {
 		for {
-			select {
-			case val, opend := <-ch:
-				r.Cond.L.Lock()
-				if opend {
-					node := val.Node
-					ord := depstack.SetLast(node.Name, val)
-					val.Order = ord
-					nodeResult.Store(node.Name, val)
-					// last.Store(val)
+			id, active := <-ch
+			if !active {
+				break
+			} else {
+				if !yield(id) {
+					return
 				}
-				r.Cond.L.Unlock()
-				r.Cond.Broadcast()
-				if !opend {
+			}
+		}
+	}
+}
+func (r *ExecuteState[K, V]) doPush(ch chan uint32, recv chan uint32) {
+	defer func() {
+		f := recover()
+		if f != nil {
+			log.Printf(" error: %v", f)
+		}
+		close(ch)
+	}()
+	var h nodeHelper
+	h.g = r.G
+	h.Init()
+Outer:
+	for r.GraphIter.HasNext() {
+		pending, err := r.GraphIter.Next()
+		if err != nil {
+			return
+		}
+		for _, v := range pending {
+			h.PushPending(v.Id)
+		}
+		next := h.CheckPrepare()
+		cursor := 0
+		for cursor < len(next) {
+			select {
+			case ch <- next[cursor]:
+				cursor++
+			case val, active := <-recv:
+				if active {
+					h.SetDone(val, val)
+				} else {
 					break Outer
 				}
-			case <-ctx.Done():
-				return
 			}
 		}
-	}()
-
-	for r.It.HasNext() {
-		nodeList, err := r.It.Next()
-		if err != nil {
-			var e V
-			return e, err
-		}
-		for _, node := range nodeList {
-			if node == nil {
-				continue
-			}
-			//  stop for dispatch Next Node
-			if ctx.Err() != nil {
-				break
-			}
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				defer func() {
-					err := recover()
-					if err != nil {
-						log.Printf("error panic ~ %v %s", err, debug.Stack())
-					}
-				}()
-				if ctx.Err() != nil {
-					return
-				}
-
-				var prevs map[string]V
-				Skip := false
-				var lastEle V
-				var lastOrd uint32
-				depMap := make(map[string]uint32)
-				for !Skip {
-					r.Cond.L.Lock()
-					prevs = make(map[string]V)
-					prevNodeId := r.G.GetDepend(node.Id)
-					for _, v := range prevNodeId {
-						nodex := r.G.FindNode(v)
-						val, ok := nodeResult.Load(nodex.Name)
-						// val, ok := nodeResult[nodex.Name]
-						if !ok || val == nil {
-							break
-						}
-						resultHolder, _ := val.(result[V])
-						prevs[nodex.Name] = resultHolder.V
-						if lastOrd <= resultHolder.Order {
-							lastEle = resultHolder.V
-							lastOrd = resultHolder.Order
-						}
-						depMap[nodex.Name] = resultHolder.Order
-					}
-					if len(prevNodeId) > 0 && len(prevNodeId) != len(prevs) {
-						r.Cond.Wait()
-					} else {
-						Skip = true
-					}
-
-					r.Cond.L.Unlock()
-				}
-				if ctx.Err() != nil {
-					return
-				}
-				handler, ok := r.Funcs[node.Name]
-				if !ok || handler == nil {
-					var e V
-					ch <- result[V]{
-						V:    e,
-						Node: node,
-					}
-					return
-				}
-
-				o1, err := handler(ctx, &State[K, V]{
-					Input:            input,
-					DependNodeResult: prevs,
-					Last:             lastEle,
-					NodeOrders:       depMap,
-					CurrentNode: *node,
-				})
-				if ctx.Err() != nil {
-					return
-				}
-				if err != nil {
-					ch <- result[V]{
-						V:    o1,
-						Node: node,
-						Err:  err,
-					}
-					return
-				}
-
-				ch <- result[V]{
-					V:    o1,
-					Node: node,
-					Err:  err,
-				}
-			}()
+		val, active := <-recv
+		if active {
+			h.SetDone(val, val)
+		} else {
+			break Outer
 		}
 	}
-	wg.Wait()
-	close(ch)
-	<-consumerWait
-	var e V
 
-	h := depstack.last.Load()
-	if h == nil {
-		return e, nil
-	}
-	val, _ := h.(result[V])
-	return val.V, nil
 }

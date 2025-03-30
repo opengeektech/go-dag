@@ -12,7 +12,6 @@ type Dag[K, V any] struct {
 	name    string
 	graph   *graph.Graph
 	funcMap atomic.Value
-	// funcMap map[string]HandlerFunc[K, V]
 	valid bool
 }
 type Option[K, V any] func(d *Dag[K, V])
@@ -89,12 +88,15 @@ func (r *Dag[K, V]) RunAsync(ctx context.Context, k K) (V, error) {
 	w := &ExecuteState[K, V]{
 		Funcs: make(map[string]HandlerFunc[K, V]),
 		G:     r.graph,
-		It:    r.graph.TopoIterator(),
+	}
+	t := r.getFuncMap()
+	for k, v := range t {
+		w.Funcs[k] = v
 	}
 	defer func() {
-		if w.It != nil {
-			w.It.Reset()
-			graph.GraphStatePool.Put(w.It)
+		if w.GraphIter != nil {
+			w.GraphIter.Reset()
+			graph.GraphStatePool.Put(w.GraphIter)
 		}
 	}()
 	v, err := w.RunAsync(ctx, k)
@@ -104,12 +106,17 @@ func (r *Dag[K, V]) RunSync(ctx context.Context, k K) (V, error) {
 	w := &ExecuteState[K, V]{
 		Funcs: make(map[string]HandlerFunc[K, V]),
 		G:     r.graph,
-		It:    r.graph.TopoIterator(),
 	}
 	t := r.getFuncMap()
 	for k, v := range t {
 		w.Funcs[k] = v
 	}
+	defer func() {
+		if w.GraphIter != nil {
+			w.GraphIter.Reset()
+			graph.GraphStatePool.Put(w.GraphIter)
+		}
+	}()
 	v, err := w.RunSync(ctx, k)
 	return v, err
 }
@@ -140,6 +147,13 @@ func Run[K, V any](Name string, ctx context.Context, params K) (V, error) {
 		panic("dag load fail")
 	}
 	return dg.RunSync(ctx, params)
+}
+func RunConcurrent[K, V any](Name string, ctx context.Context, params K) (V, error) {
+	dg := GetGlobalDag[K, V](Name)
+	if dg == nil || !dg.valid {
+		panic("dag load fail")
+	}
+	return dg.RunAsync(ctx, params)
 }
 
 func RunAsync[K, V any](Name string, ctx context.Context, params K) (V, error) {
