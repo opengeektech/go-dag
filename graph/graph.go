@@ -176,12 +176,27 @@ type TopoIterator struct {
 }
 
 var (
-	GraphStatePool = sync.Pool{
-		New: func() any {
-			return &TopoIterator{}
+	GraphStatePool = &Pools[*TopoIterator] {
+		Pool: sync.Pool{
+			New: func() any {
+				return &TopoIterator{}
+			},
 		},
 	}
 )
+type Pools[K any] struct {
+	Pool sync.Pool
+}
+func (r *Pools[K]) Get() K {
+	v,ok := r.Pool.Get().(K)
+	if !ok {
+		return *new(K)
+	}
+	return v
+}
+func (r *Pools[K]) Put(k K) {
+	r.Pool.Put(k)
+}
 
 func (g *TopoIterator) Reset() {
 	g.remaining = nil
@@ -192,10 +207,7 @@ func (g *TopoIterator) Reset() {
 }
 
 func (g *Graph) TopoIterator() *TopoIterator {
-	it, _ := GraphStatePool.Get().(*TopoIterator)
-	if it == nil {
-		it = &TopoIterator{}
-	}
+	it := GraphStatePool.Get()
 	// 创建入度副本
 	inDegree := make(map[uint32]uint32)
 	for id, d := range g.InDegreeMap {

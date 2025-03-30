@@ -10,11 +10,62 @@ import (
 	"github.com/opengeektech/go-dag/graph"
 	"go.uber.org/goleak"
 )
+
 func TestMain(m *testing.M) {
 	defer goleak.VerifyTestMain(m)
 	os.Exit(m.Run())
 }
+func Benchmark_graph(b *testing.B) {
+	b.Run("b1", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			gg := graph.NewGraph(
+				func(c *graph.Graph) {
+					c.AddNode(&graph.Node{
+						Name: "a",
+					})
+					c.AddNode(&graph.Node{
+						Name: "b",
+					})
+					c.AddNode(&graph.Node{
+						Name: "c",
+					})
 
+				},
+			)
+			gg.DependOn("b", "a")
+			gg.DependOn("c", "b", "a")
+			var factory = func() *ExecuteState[int, int] {
+				var g = &ExecuteState[int, int]{
+					Funcs: map[string]HandlerFunc[int, int]{
+						"a": func(ctx context.Context, s *State[int, int]) (int, error) {
+							// b.Log("step1 ", str(s))
+							return s.Input + 1, nil
+						},
+						"b": func(ctx context.Context, s *State[int, int]) (int, error) {
+							// b.Log("step2", str(s))
+							return s.DependNodeResult["a"] * 2, nil
+						},
+						"c": func(ctx context.Context, s *State[int, int]) (int, error) {
+							// b.Log("step3", str(s))
+							return s.DependNodeResult["b"] * 2, nil
+						},
+					},
+					G: gg,
+				}
+				return g
+			}
+			// 1->  1+1=2  => 2 *2 = 4 => 4*2 =8
+			last, err := factory().RunAsync(context.TODO(), 1)
+			if err != nil {
+				b.Error(err)
+			}
+			_ = last
+			// b.Log("last> ", last)
+		}
+
+	})
+
+}
 
 func Test_print(t *testing.T) {
 	gg := graph.NewGraph(
@@ -28,50 +79,49 @@ func Test_print(t *testing.T) {
 			c.AddNode(&graph.Node{
 				Name: "c",
 			})
-		
+
 		},
 	)
-	gg.DependOn("b","a")
-	gg.DependOn("c","b","a")
-	var factory = func () *ExecuteState[int,int] {
-		var g = &ExecuteState[int,int] {
+	gg.DependOn("b", "a")
+	gg.DependOn("c", "b", "a")
+	var factory = func() *ExecuteState[int, int] {
+		var g = &ExecuteState[int, int]{
 			Funcs: map[string]HandlerFunc[int, int]{
 				"a": func(ctx context.Context, s *State[int, int]) (int, error) {
-					t.Log("step1 ",str(s))
-					return s.Input+1, nil
+					t.Log("step1 ", str(s))
+					return s.Input + 1, nil
 				},
 				"b": func(ctx context.Context, s *State[int, int]) (int, error) {
-					t.Log("step2",str(s))
-					return s.DependNodeResult["a"]*2, nil
+					t.Log("step2", str(s))
+					return s.DependNodeResult["a"] * 2, nil
 				},
 				"c": func(ctx context.Context, s *State[int, int]) (int, error) {
-					t.Log("step3",str(s))
-					return s.DependNodeResult["b"]*2, nil
+					t.Log("step3", str(s))
+					return s.DependNodeResult["b"] * 2, nil
 				},
 			},
 			G: gg,
 		}
 		return g
 	}
-	
+
 	// 1->  1+1=2  => 2 *2 = 4 => 4*2 =8
-	last,err := factory().RunAsync(context.TODO(),1)
+	last, err := factory().RunAsync(context.TODO(), 1)
 	if err != nil {
 		t.Error(err)
 	}
-	t.Log("last> ",last)
-	last,err =  factory().RunSync(context.TODO(),1)
+	t.Log("last> ", last)
+	last, err = factory().RunSync(context.TODO(), 1)
 	if err != nil {
 		t.Error(err)
 	}
-	t.Log("last> ",last)
+	t.Log("last> ", last)
 
 }
 func str(w any) string {
-	bs,_ := json.Marshal(w)
+	bs, _ := json.Marshal(w)
 	return string(bs)
 }
-
 
 func Test_iter(t *testing.T) {
 	gg := graph.NewGraph(
@@ -85,36 +135,36 @@ func Test_iter(t *testing.T) {
 			c.AddNode(&graph.Node{
 				Name: "c",
 			})
-		
+
 		},
 	)
-	gg.DependOn("b","a")
-	gg.DependOn("c","b","a")
-	var g = ExecuteState[int,int] {
-		
+	gg.DependOn("b", "a")
+	gg.DependOn("c", "b", "a")
+	var g = ExecuteState[int, int]{
+
 		Funcs: map[string]HandlerFunc[int, int]{
 			"a": func(ctx context.Context, s *State[int, int]) (int, error) {
-				t.Log("step1 ",str(s))
-				return s.Input+1, nil
+				t.Log("step1 ", str(s))
+				return s.Input + 1, nil
 			},
 			"b": func(ctx context.Context, s *State[int, int]) (int, error) {
-				t.Log("step2",str(s))
-				return s.DependNodeResult["a"]*2, nil
+				t.Log("step2", str(s))
+				return s.DependNodeResult["a"] * 2, nil
 			},
 			"c": func(ctx context.Context, s *State[int, int]) (int, error) {
-				t.Log("step3",str(s))
-				return s.DependNodeResult["b"]*2, nil
+				t.Log("step3", str(s))
+				return s.DependNodeResult["b"] * 2, nil
 			},
 		},
 		G: gg,
 	}
 	ch := g.IterChan()
 	for {
-		id,ok := <-ch
+		id, ok := <-ch
 		if !ok {
 			break
 		}
-		fmt.Println("iter ",id)
+		fmt.Println("iter ", id)
 		g.iterDone(id)
 	}
 }
@@ -131,26 +181,26 @@ func Test_iter2(t *testing.T) {
 			c.AddNode(&graph.Node{
 				Name: "c",
 			})
-		
+
 		},
 	)
-	gg.DependOn("b","a")
-	gg.DependOn("c","b","a")
-	t.Run("iter_graph",func (t *testing.T) {
-		var g = ExecuteState[int,int] {
-		
+	gg.DependOn("b", "a")
+	gg.DependOn("c", "b", "a")
+	t.Run("iter_graph", func(t *testing.T) {
+		var g = ExecuteState[int, int]{
+
 			Funcs: map[string]HandlerFunc[int, int]{
 				"a": func(ctx context.Context, s *State[int, int]) (int, error) {
-					t.Log("step1 ",str(s))
-					return s.Input+1, nil
+					t.Log("step1 ", str(s))
+					return s.Input + 1, nil
 				},
 				"b": func(ctx context.Context, s *State[int, int]) (int, error) {
-					t.Log("step2",str(s))
-					return s.DependNodeResult["a"]*2, nil
+					t.Log("step2", str(s))
+					return s.DependNodeResult["a"] * 2, nil
 				},
 				"c": func(ctx context.Context, s *State[int, int]) (int, error) {
-					t.Log("step3",str(s))
-					return s.DependNodeResult["b"]*2, nil
+					t.Log("step3", str(s))
+					return s.DependNodeResult["b"] * 2, nil
 				},
 			},
 			G: gg,
@@ -160,25 +210,25 @@ func Test_iter2(t *testing.T) {
 			g.iterDone(NodeId)
 		}
 	})
-	
-	t.Run("iter_graph-2",func (t *testing.T) {
-		var g = ExecuteState[int,int] {
-		
+
+	t.Run("iter_graph-2", func(t *testing.T) {
+		var g = ExecuteState[int, int]{
+
 			NodeResult: map[uint32]any{},
 			NodeOrder:  map[uint32]uint32{},
 
 			Funcs: map[string]HandlerFunc[int, int]{
 				"a": func(ctx context.Context, s *State[int, int]) (int, error) {
-					t.Log("step1 ",str(s))
-					return s.Input+1, nil
+					t.Log("step1 ", str(s))
+					return s.Input + 1, nil
 				},
 				"b": func(ctx context.Context, s *State[int, int]) (int, error) {
-					t.Log("step2",str(s))
-					return s.DependNodeResult["a"]*2, nil
+					t.Log("step2", str(s))
+					return s.DependNodeResult["a"] * 2, nil
 				},
 				"c": func(ctx context.Context, s *State[int, int]) (int, error) {
-					t.Log("step3",str(s))
-					return s.DependNodeResult["b"]*2, nil
+					t.Log("step3", str(s))
+					return s.DependNodeResult["b"] * 2, nil
 				},
 			},
 			G: gg,
@@ -186,36 +236,36 @@ func Test_iter2(t *testing.T) {
 		for NodeId := range g.Iter() {
 			fmt.Println("iter ", NodeId)
 			// g.IterDone(NodeId)
-			out,err := g.RunNodeBlock(context.TODO(), g.G.FindNode(NodeId), 1)
+			out, err := g.RunNodeBlock(context.TODO(), g.G.FindNode(NodeId), 1)
 			if err != nil {
 				t.Error(err)
 			}
-			t.Log("output > ",out)
+			t.Log("output > ", out)
 		}
 	})
-	t.Run("iter_graph-3",func (t *testing.T) {
-		var g = ExecuteState[int,int] {
-	
+	t.Run("iter_graph-3", func(t *testing.T) {
+		var g = ExecuteState[int, int]{
+
 			NodeResult: map[uint32]any{},
 			NodeOrder:  map[uint32]uint32{},
 
 			Funcs: map[string]HandlerFunc[int, int]{
 				"a": func(ctx context.Context, s *State[int, int]) (int, error) {
-					t.Log("step1 ",str(s))
-					return s.Input+1, nil
+					t.Log("step1 ", str(s))
+					return s.Input + 1, nil
 				},
 				"b": func(ctx context.Context, s *State[int, int]) (int, error) {
-					t.Log("step2",str(s))
-					return s.DependNodeResult["a"]*2, nil
+					t.Log("step2", str(s))
+					return s.DependNodeResult["a"] * 2, nil
 				},
 				"c": func(ctx context.Context, s *State[int, int]) (int, error) {
-					t.Log("step3",str(s))
-					return s.DependNodeResult["b"]*2, nil
+					t.Log("step3", str(s))
+					return s.DependNodeResult["b"] * 2, nil
 				},
 			},
 			G: gg,
 		}
-		t.Log(g.RunSync(context.TODO(),1))
+		t.Log(g.RunSync(context.TODO(), 1))
 	})
 
 }

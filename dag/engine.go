@@ -87,6 +87,24 @@ func (r *ExecuteState[K, V]) ensure() {
 		r.NodeResult = make(map[uint32]any)
 	}
 }
+type uchannel[K any] struct {
+	mu   sync.Mutex
+	ch chan K
+	exit bool
+}
+func (r *uchannel[K]) Send(k K) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.exit {
+		r.ch <- k
+	}
+}
+func (r *uchannel[K]) Close() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.exit = true
+	close(r.ch)
+}
 func (r *ExecuteState[K, V]) RunAsync(ctx context.Context, input K) (V, error) {
 	r.ensure()
 	var (
@@ -99,8 +117,11 @@ func (r *ExecuteState[K, V]) RunAsync(ctx context.Context, input K) (V, error) {
 		Err error
 	}
 	ch := r.IterChan()
-	out := make(chan tmp, 1)
-	defer close(out)
+	// out := make(chan tmp, 1)
+	var out = &uchannel[tmp]{
+		ch: make(chan tmp, 1),
+	}
+	defer out.Close()
 	for {
 		if ctx.Err() != nil {
 			return v, ctx.Err()
@@ -121,12 +142,12 @@ func (r *ExecuteState[K, V]) RunAsync(ctx context.Context, input K) (V, error) {
 				if ctx.Err() != nil {
 					return
 				}
-				out <- tmp{
+				out.Send( tmp{
 					V:   t1,
 					Err: err,
-				}
+				})
 			}()
-		case out, ok := <-out:
+		case out, ok := <-out.ch:
 			if !ok {
 				return v, err
 			}
