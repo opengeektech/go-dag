@@ -23,6 +23,7 @@ type ExecuteState[K, V any] struct {
 	OrdIdAlloc uint32
 }
 
+
 func (r *ExecuteState[K, V]) sendChan(ch chan uint32, k uint32) {
 	defer func() {
 		f := recover()
@@ -156,7 +157,6 @@ func (r *ExecuteState[K, V]) RunSync(ctx context.Context, input K) (V, error) {
 		if err != nil {
 			return v, err
 		}
-		// fmt.Println(v,err)
 	}
 	return v, err
 }
@@ -263,13 +263,13 @@ func (r *ExecuteState[K, V]) Iter() func(func(activeId uint32) bool) {
 		}
 	}
 }
-func (r *ExecuteState[K, V]) doPush(ch chan uint32, recv chan uint32) {
+func (r *ExecuteState[K, V]) doPush(activeNodeId chan uint32, recv chan uint32) {
 	defer func() {
 		f := recover()
 		if f != nil {
 			log.Printf(" error: %v", f)
 		}
-		close(ch)
+		close(activeNodeId)
 	}()
 	var h nodeHelper
 	h.g = r.G
@@ -287,7 +287,7 @@ Outer:
 		cursor := 0
 		for cursor < len(next) {
 			select {
-			case ch <- next[cursor]:
+			case activeNodeId <- next[cursor]:
 				cursor++
 			case val, active := <-recv:
 				if active {

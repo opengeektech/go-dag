@@ -1,16 +1,21 @@
-package graph
+package graphview
 
 import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+
+	"github.com/opengeektech/go-dag/graph"
 )
 
 type GraphContentHelper interface {
-	Decode(s []byte) (*Graph, error)
+	Decode(s []byte) ([]*Graph, error)
 }
 
 type JsonDecoder struct {
+}
+type graphList struct {
+	GraphList []graphJsonContent `json:"graphList"`
 }
 type graphJsonContent struct {
 	GraphName string `json:"graphName"`
@@ -50,15 +55,30 @@ type graphJsonContent struct {
 var (
 	ErrIllegalContent = fmt.Errorf("Illegal Content check")
 )
-
-// Decode implements GraphContentHelper.
-func (j *JsonDecoder) Decode(s []byte ) (*Graph, error) {
-	var t graphJsonContent
-	err := json.Unmarshal([]byte(s), &t)
+type Graph = graph.Graph
+type Node = graph.Node
+func (j *JsonDecoder) Decode(s []byte) ([]*Graph, error) {
+	var h graphList
+	err := json.Unmarshal(s, &h)
 	if err != nil {
 		return nil, err
 	}
-	g := NewGraph()
+	var row []*Graph
+	for _, v := range h.GraphList {
+		g, err := j.decoderow(v)
+		if err != nil {
+			return row, err
+		}
+		row = append(row, g)
+
+	}
+	return row, nil
+}
+
+// Decode implements GraphContentHelper.
+func (j *JsonDecoder) decoderow(t graphJsonContent) (*Graph, error) {
+
+	g := graph.NewGraph()
 	k := uint32(1)
 	repeated := make(map[uint32]struct{})
 	repeatedName := make(map[string]struct{})
@@ -107,20 +127,20 @@ func (j *JsonDecoder) Decode(s []byte ) (*Graph, error) {
 	for _, v := range t.Nodes {
 		curr := nodeList[v.Id]
 		if curr == nil {
-			return nil,fmt.Errorf("Id error %w",ErrIllegalContent)
+			return nil, fmt.Errorf("Id error %w", ErrIllegalContent)
 		}
 		if len(v.DependOn) == 0 {
-			g.dependOn(curr,)
+			g.DependOnNode(curr)
 		}
 		var pre []*Node
-		for _,id := range v.DependOn {
-			nod,ok := nodeList[id]
+		for _, id := range v.DependOn {
+			nod, ok := nodeList[id]
 			if !ok {
-				return nil,fmt.Errorf("node not found %w",ErrIllegalContent)
+				return nil, fmt.Errorf("node not found %w", ErrIllegalContent)
 			}
 			// g.dependOn(curr,nod)
-			pre=append(pre,nod)
-			g.dependOn(curr,pre...)
+			pre = append(pre, nod)
+			g.DependOnNode(curr, pre...)
 		}
 	}
 	return g, nil

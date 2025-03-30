@@ -148,13 +148,7 @@ func Run[K, V any](Name string, ctx context.Context, params K) (V, error) {
 	}
 	return dg.RunSync(ctx, params)
 }
-func RunConcurrent[K, V any](Name string, ctx context.Context, params K) (V, error) {
-	dg := GetGlobalDag[K, V](Name)
-	if dg == nil || !dg.valid {
-		panic("dag load fail")
-	}
-	return dg.RunAsync(ctx, params)
-}
+
 
 func RunAsync[K, V any](Name string, ctx context.Context, params K) (V, error) {
 	dg := GetGlobalDag[K, V](Name)

@@ -1,4 +1,4 @@
-package graph
+package graphview
 
 import (
 	"github.com/opengeektech/go-dag/utils"
@@ -23,7 +23,7 @@ func TestJsonDecoder_Decode(t *testing.T) {
 			t.Fatal("nil graph")
 			
 		}
-		it := g.TopoIterator()
+		it := g[0].TopoIterator()
 		for it.HasNext() {
 			b,err := it.Next()
 			if err != nil {

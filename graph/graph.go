@@ -14,6 +14,15 @@ type Graph struct {
 	InDegreeMap map[uint32]uint32
 	DependOnMap map[uint32]map[uint32]struct{}
 }
+func (r *Graph) GetEdgeList() [][]uint32{
+	var ret [][]uint32
+	for from,v := range r.next {
+		for to := range v {
+			ret=append(ret,[]uint32{from,to})
+		}
+	}
+	return ret
+}
 
 func (r *Graph) FindNode(id uint32) *Node {
 	return r.NodeIdMapping[id]
@@ -58,7 +67,7 @@ func (r *Graph) DependOn(name string, val ...string) *Graph {
 		subs = append(subs, h)
 	}
 
-	r.dependOn(nameMapping[name], subs...)
+	r.DependOnNode(nameMapping[name], subs...)
 	return r
 }
 func WithDependOn(to string, dependNodes ...string) Option {
@@ -81,7 +90,7 @@ func WithEdge(from, to string) Option {
 		if l == nil || r == nil {
 			panic("not found Edge on " + from + "," + to)
 		}
-		h.dependOn(r, l)
+		h.DependOnNode(r, l)
 	}
 }
 func WithNodes(nodes ...*Node) Option {
@@ -131,7 +140,7 @@ func (r *Graph) GetDepend(id uint32) []uint32 {
 func (g *Graph) AddNode(h *Node) {
 	g.ensureNode(h)
 }
-func (g *Graph) dependOn(h *Node, depend ...*Node) {
+func (g *Graph) DependOnNode(h *Node, depend ...*Node) {
 	g.ensureNode(h)
 	for _, k := range depend {
 		g.ensureNode(k)
