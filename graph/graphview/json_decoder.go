@@ -3,18 +3,21 @@ package graphview
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"strconv"
 
 	"github.com/opengeektech/go-dag/graph"
 )
 
 type GraphContentHelper interface {
-	Decode(s []byte) ([]*Graph, error)
+	Decode(io.Reader) ([]*Graph, error)
 }
 
 type JsonDecoder struct {
 }
 type graphList struct {
+	GraphName string 
+	GraphId uint32
 	GraphList []graphJsonContent `json:"graphList"`
 }
 type graphJsonContent struct {
@@ -57,15 +60,16 @@ var (
 )
 type Graph = graph.Graph
 type Node = graph.Node
-func (j *JsonDecoder) Decode(s []byte) ([]*Graph, error) {
+func (j *JsonDecoder) Decode(r io.Reader) ([]*Graph, error) {
 	var h graphList
-	err := json.Unmarshal(s, &h)
+	err := json.NewDecoder(r).Decode(&h)
 	if err != nil {
 		return nil, err
 	}
 	var row []*Graph
 	for _, v := range h.GraphList {
 		g, err := j.decoderow(v)
+		g.GraphName=v.GraphName
 		if err != nil {
 			return row, err
 		}

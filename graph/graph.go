@@ -10,13 +10,13 @@ type Graph struct {
 	IdAlloc       uint32
 	NodeNameMapping map[string]*Node
 	NodeIdMapping    map[uint32]*Node
-	next        map[uint32]map[uint32]struct{}
+	Next        map[uint32]map[uint32]struct{}
 	InDegreeMap map[uint32]uint32
 	DependOnMap map[uint32]map[uint32]struct{}
 }
 func (r *Graph) GetEdgeList() [][]uint32{
 	var ret [][]uint32
-	for from,v := range r.next {
+	for from,v := range r.Next {
 		for to := range v {
 			ret=append(ret,[]uint32{from,to})
 		}
@@ -102,7 +102,7 @@ func WithNodes(nodes ...*Node) Option {
 }
 func NewGraph(opts ...Option) *Graph {
 	var h = &Graph{
-		next:        make(map[uint32]map[uint32]struct{}),
+		Next:        make(map[uint32]map[uint32]struct{}),
 		NodeIdMapping:    make(map[uint32]*Node),
 		InDegreeMap: make(map[uint32]uint32),
 	}
@@ -146,13 +146,13 @@ func (g *Graph) DependOnNode(h *Node, depend ...*Node) {
 		g.ensureNode(k)
 	}
 	for _, pre := range depend {
-		_, ok := g.next[pre.Id][h.Id]
+		_, ok := g.Next[pre.Id][h.Id]
 		if !ok {
-			_, ok := g.next[pre.Id]
+			_, ok := g.Next[pre.Id]
 			if !ok {
-				g.next[pre.Id] = make(map[uint32]struct{})
+				g.Next[pre.Id] = make(map[uint32]struct{})
 			}
-			g.next[pre.Id][h.Id] = struct{}{}
+			g.Next[pre.Id][h.Id] = struct{}{}
 			g.InDegreeMap[h.Id]++
 			if g.DependOnMap == nil {
 				g.DependOnMap = make(map[uint32]map[uint32]struct{}, 0)
@@ -266,7 +266,7 @@ func (it *TopoIterator) Next() ([]*Node, error) {
 	it.processed++
 	for _, current := range current {
 		// 处理后继节点
-		for neighborID := range it.graph.next[current.Id] {
+		for neighborID := range it.graph.Next[current.Id] {
 			it.inDegree[neighborID] = it.inDegree[neighborID] - 1
 			if it.inDegree[neighborID] == 0 {
 				if _, exist := it.remaining[neighborID]; exist {

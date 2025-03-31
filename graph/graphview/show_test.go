@@ -1,9 +1,9 @@
 package graphview
 
 import (
+	"bytes"
 	"os"
 	"testing"
-
 )
 
 func TestShowDotGraph(t *testing.T) {
@@ -13,7 +13,7 @@ func TestShowDotGraph(t *testing.T) {
 		return
 	}
 	var h JsonDecoder 
-	g,err := h.Decode((all),)
+	g,err := h.Decode(bytes.NewBuffer(all))
 	if err != nil {
 		t.Fatal(err)
 		return

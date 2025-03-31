@@ -3,11 +3,11 @@ package dag
 import (
 	"context"
 	"fmt"
+	"github.com/opengeektech/go-dag/graph"
+	"golang.org/x/sync/errgroup"
 	"log"
 	"sync"
 	"sync/atomic"
-
-	"github.com/opengeektech/go-dag/graph"
 )
 
 type ExecuteState[K, V any] struct {
@@ -15,14 +15,12 @@ type ExecuteState[K, V any] struct {
 	Funcs     map[string]HandlerFunc[K, V]
 	G         *graph.Graph
 	GraphIter *graph.TopoIterator
-
 	NodeResult map[uint32]any
 	NodeOrder  map[uint32]uint32
 	Active     chan uint32
 	Recv       chan uint32
 	OrdIdAlloc uint32
 }
-
 
 func (r *ExecuteState[K, V]) sendChan(ch chan uint32, k uint32) {
 	defer func() {
@@ -87,77 +85,52 @@ func (r *ExecuteState[K, V]) ensure() {
 		r.NodeResult = make(map[uint32]any)
 	}
 }
-type uchannel[K any] struct {
-	mu   sync.Mutex
-	ch chan K
-	exit bool
-}
-func (r *uchannel[K]) Send(k K) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if !r.exit {
-		r.ch <- k
-	}
-}
-func (r *uchannel[K]) Close() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.exit = true
-	close(r.ch)
-}
+
+
 func (r *ExecuteState[K, V]) RunAsync(ctx context.Context, input K) (V, error) {
 	r.ensure()
 	var (
-		v   V
 		err error
 	)
 	defer r.iterclose()
-	type tmp struct {
-		V   V
-		Err error
-	}
 	ch := r.IterChan()
-	// out := make(chan tmp, 1)
-	var out = &uchannel[tmp]{
-		ch: make(chan tmp, 1),
-	}
-	defer out.Close()
-	for {
-		if ctx.Err() != nil {
-			return v, ctx.Err()
-		}
-		select {
-		case <-ctx.Done():
-			return v,ctx.Err()
-		case nodeId, ok := <-ch:
-			if !ok {
-				return v, err
+	wg, ctx := errgroup.WithContext(ctx)
+	var (
+		lastValue atomic.Value
+	)
+	wg.Go(func() error {
+		for {
+			if ctx.Err() != nil {
+				return ctx.Err()
 			}
-			if nodeId == 0 {
-				panic("illgal NodeId ")
-			}
-			go func() {
-				gg := r.G.FindNode(nodeId)
-				t1, err := r.RunNodeBlock(ctx, gg, input)
-				if ctx.Err() != nil {
-					return
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case nodeId, ok := <-ch:
+				if !ok {
+					return nil
 				}
-				out.Send( tmp{
-					V:   t1,
-					Err: err,
+				if nodeId == 0 {
+					panic("illgal NodeId ")
+				}
+				wg.Go(func() error {
+					gg := r.G.FindNode(nodeId)
+					t1, err := r.RunNodeBlock(ctx, gg, input)
+					if ctx.Err() != nil {
+						return ctx.Err()
+					}
+					if err == nil {
+						lastValue.Store(t1)
+					}
+					return err
 				})
-			}()
-		case out, ok := <-out.ch:
-			if !ok {
-				return v, err
+
 			}
-			if out.Err != nil {
-				return out.V, out.Err
-			}
-			v = out.V
-			err = out.Err
 		}
-	}
+	})
+	err = wg.Wait()
+	b, _ := lastValue.Load().(V)
+	return b, err
 }
 
 func (r *ExecuteState[K, V]) RunSync(ctx context.Context, input K) (V, error) {
@@ -253,7 +226,19 @@ func (state *ExecuteState[K, V]) RunNodeBlock(ctx context.Context, node *graph.N
 		})
 		return lastNodeOutput, nil
 	}
-	output, err := handler(ctx, st)
+	var (
+		output V
+		err error
+	)
+	output,err = func () (output V, err error) {
+		defer func () {
+			err1 := recover()
+			if err1 != nil {
+				err = fmt.Errorf("panic error: %v", err1)
+			}
+		}()
+		return handler(ctx, st)
+	}()
 	state.write(func() {
 		state.OrdIdAlloc++
 		state.NodeOrder[node.Id] = state.OrdIdAlloc

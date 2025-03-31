@@ -1,9 +1,11 @@
 package graphview
 
 import (
-	"github.com/opengeektech/go-dag/utils"
+	"bytes"
 	"os"
 	"testing"
+
+	"github.com/opengeektech/go-dag/utils"
 )
 
 func TestJsonDecoder_Decode(t *testing.T) {
@@ -14,7 +16,7 @@ func TestJsonDecoder_Decode(t *testing.T) {
 			return
 		}
 		var h JsonDecoder 
-		g,err := h.Decode((all),)
+		g,err := h.Decode(bytes.NewBuffer(all))
 		if err != nil {
 			t.Error(err)
 			return

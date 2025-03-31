@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/opengeektech/go-dag/graph"
 	"go.uber.org/goleak"
@@ -16,7 +17,8 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 func Benchmark_graph(b *testing.B) {
-	b.Run("b1", func(b *testing.B) {
+	st := time.Millisecond*100
+	b.Run("b2~sync", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			gg := graph.NewGraph(
 				func(c *graph.Graph) {
@@ -46,6 +48,56 @@ func Benchmark_graph(b *testing.B) {
 							return s.DependNodeResult["a"] * 2, nil
 						},
 						"c": func(ctx context.Context, s *State[int, int]) (int, error) {
+							time.Sleep(st)
+							// b.Log("step3", str(s))
+							return s.DependNodeResult["b"] * 2, nil
+						},
+					},
+					G: gg,
+				}
+				return g
+			}
+			// 1->  1+1=2  => 2 *2 = 4 => 4*2 =8
+			last, err := factory().RunSync(context.TODO(), 1)
+			if err != nil {
+				b.Error(err)
+			}
+			_ = last
+			// b.Log("last> ", last)
+		}
+
+	})
+	b.Run("b1-async", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			gg := graph.NewGraph(
+				func(c *graph.Graph) {
+					c.AddNode(&graph.Node{
+						Name: "a",
+					})
+					c.AddNode(&graph.Node{
+						Name: "b",
+					})
+					c.AddNode(&graph.Node{
+						Name: "c",
+					})
+
+				},
+			)
+			gg.DependOn("b", "a")
+			gg.DependOn("c", "b", "a")
+			var factory = func() *ExecuteState[int, int] {
+				var g = &ExecuteState[int, int]{
+					Funcs: map[string]HandlerFunc[int, int]{
+						"a": func(ctx context.Context, s *State[int, int]) (int, error) {
+							// b.Log("step1 ", str(s))
+							return s.Input + 1, nil
+						},
+						"b": func(ctx context.Context, s *State[int, int]) (int, error) {
+							// b.Log("step2", str(s))
+							return s.DependNodeResult["a"] * 2, nil
+						},
+						"c": func(ctx context.Context, s *State[int, int]) (int, error) {
+							time.Sleep(st)
 							// b.Log("step3", str(s))
 							return s.DependNodeResult["b"] * 2, nil
 						},
